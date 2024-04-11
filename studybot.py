@@ -4,7 +4,7 @@ from discord.ext import commands
 from discord import app_commands #for slash commands if they ever work
 from dataclasses import dataclass
 
-BOT_TOKEN = "MTE3Mzg4NjA3MzQzNzQyOTgyMg.G2ZM8V.a608YbuTui05G6UCLt75KGgy66n60ayyv6EMOE"
+BOT_TOKEN = NULL #add back in when using
 CHANNEL_ID = 1227722112404553889
 SERVER_ID = 1227721401239343187
 intents = discord.Intents.all()
