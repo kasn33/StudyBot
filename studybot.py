@@ -5,7 +5,7 @@ import datetime
 import sqlite3
 
 BOT_TOKEN = ""
-CHANNEL_ID = 1174150837996625932
+CHANNEL_ID = 1227722112404553889
 SERVER_ID = 1227721401239343187
 intents = discord.Intents.all()
 client = discord.Client(intents=intents)
@@ -101,7 +101,7 @@ async def time(ctx, user: discord.Option(discord.Member, required="True", descri
     if not is_admin(ctx) and user_id != int(ctx.author.id):
         await ctx.respond("You don't have permission to check other people!")
         return
-    if(user.nick is None):
+    if user.nick is None:
         user_name = user.name
     else:
         user_name = user.nick
@@ -115,29 +115,31 @@ async def time(ctx, user: discord.Option(discord.Member, required="True", descri
 
 #show all sessions for a user (need permission if not that user)
 @bot.slash_command(description = "Show all of a user's activity for the week")
-async def get_report(ctx, user: discord.Option(discord.Member, required="True", description="Who you want to check the activity of (could be you)")):
+async def getreport(ctx, user: discord.Option(discord.Member, required="True", description="Who you want to check the activity of (could be you)")):
     user_id = user.id
     if not is_admin(ctx) and user_id != int(ctx.author.id):
         await ctx.respond("You don't have permission to check other people!")
         return
-    if(user.nick is None):
+    if user.nick is None:
         user_name = user.name
     else:
         user_name = user.nick
     
-    #total hours out of required
+    embed = discord.Embed(
+        title=f"**Report for {user_name}**",
+        color=discord.Colour.blurple(),
+    )
     tup = cur.execute("SELECT total_time, required_hours FROM studiers WHERE user_id = (?)", (user_id,)).fetchone()
     if not tup:
         await ctx.respond(f"{user_name} has not started studing this week")
         return
     total_time, required_hours = tup
-    await ctx.respond(f"{user_name} has completed {str(datetime.timedelta(seconds=total_time)).split('.')[0]} out of {str(datetime.timedelta(seconds=required_hours)).split('.')[0]}")
-    
-    #session by session
+    embed.add_field(name="**Total Activity**", value=f"{user_name} has completed **{str(datetime.timedelta(seconds=total_time)).split('.')[0]}** out of **{str(datetime.timedelta(seconds=required_hours)).split('.')[0]}**")
     sessions = cur.execute(f"SELECT start_time, duration, activity FROM sessions WHERE user_id = (?) AND is_complete = 1 ORDER BY start_time", (user_id,)).fetchall()
     for tup in sessions:
-        weekday = datetime.datetime.fromtimestamp(tup[0]).strftime("%A")
-        await ctx.send(f"Session on {weekday} for {str(datetime.timedelta(seconds=tup[1])).split('.')[0]} doing: {tup[2]}")
+        weekday = (datetime.datetime.fromtimestamp(tup[0])).strftime("%A")
+        embed.add_field(name=f"**{weekday}**", value=f"Spent **{str(datetime.timedelta(seconds=tup[1])).split('.')[0]}** doing: {tup[2]}", inline=False)
+    await ctx.respond(embed=embed)
 
 
 #remove time from a user (needs permission) (less than 24 hours)
@@ -147,17 +149,20 @@ async def add(ctx, user: discord.Option(discord.Member, required="True", descrip
             await ctx.respond("You don't have permission for this command")
             return
     user_id = user.id
-    if(user.nick is None):
+    if user.nick is None:
         user_name = user.name
     else:
         user_name = user.nick
-    tup = cur.execute(f"SELECT total_time FROM studiers WHERE user_id = (?)", (user_id,)).fetchall()
+    tup = cur.execute(f"SELECT total_time FROM studiers WHERE user_id = (?)", (user_id,)).fetchone()
     if not tup:
         await ctx.respond(f"{user_name} has not started studying this week.")
         return
     orig_time = tup[0]
-    new_time = orig_time + datetime.timedelta(hours=hours, minutes=minutes).seconds
+    duration = datetime.timedelta(hours=hours, minutes=minutes).seconds
+    new_time = orig_time + duration
     cur.execute(f"UPDATE studiers SET total_time = (?) WHERE user_id = (?)", (new_time, user_id))
+    current_time = discord.Object(ctx.interaction.id).created_at.timestamp()
+    cur.execute(f"INSERT INTO sessions (start_time, is_complete, user_id, duration, activity) VALUES (?,?,?,?,?)", (current_time, 1, user_id, duration, "Added by admin"))
     con.commit()
 
     human_readable_orig = str(datetime.timedelta(seconds=orig_time)).split('.')[0]
@@ -172,7 +177,7 @@ async def subtract(ctx, user: discord.Option(discord.Member, required="True", de
         await ctx.respond("You don't have permission for this command")
         return
     user_id = user.id
-    if(user.nick is None):
+    if user.nick is None:
         user_name = user.name
     else:
         user_name = user.nick
@@ -181,8 +186,11 @@ async def subtract(ctx, user: discord.Option(discord.Member, required="True", de
         await ctx.respond(f"{user_name} has not started studying this week.")
         return
     orig_time = tup[0]
-    new_time = orig_time - datetime.timedelta(hours=hours, minutes=minutes).seconds
+    duration = datetime.timedelta(hours=hours, minutes=minutes).seconds
+    new_time = orig_time - duration
     cur.execute(f"UPDATE studiers SET total_time = (?) WHERE user_id = (?)", (new_time, user_id))
+    current_time = discord.Object(ctx.interaction.id).created_at.timestamp()
+    cur.execute(f"INSERT INTO sessions (start_time, is_complete, user_id, duration, activity) VALUES (?,?,?,?,?)", (current_time, 1, user_id, duration*(-1), "Removed by admin"))
     con.commit()
 
     human_readable_orig = str(datetime.timedelta(seconds=orig_time)).split('.')[0]
@@ -190,8 +198,8 @@ async def subtract(ctx, user: discord.Option(discord.Member, required="True", de
     await ctx.respond(f"Changed hours for {user_name} from {human_readable_orig} to {human_readable_new}")
 
 
-#add roles for admin (must be server administrator)
-@bot.slash_command(description = "Add admin permissions to a role (must be server owner)")
+#add role for admin (must be server administrator)
+@bot.slash_command(description = "Add admin permissions to a role (must be server admin)")
 async def promote(ctx, role: discord.Option(discord.Role, required="True", description="Which role do you want to give admin permissions to")):
     if not is_admin(ctx) and not ctx.author.guild_permissions.administrator:
         await ctx.respond("You don't have permission for this command")
@@ -203,6 +211,22 @@ async def promote(ctx, role: discord.Option(discord.Role, required="True", descr
     con .commit()
     admin_roles.add(role.id)
     await ctx.respond(f"Added role {role.name} as admin")
+
+
+#remove role for admin (must be server administrator)
+@bot.slash_command(description = "Remove admin permissions to a role (must be server admin)")
+async def demote(ctx, role: discord.Option(discord.Role, required="True", description="Which role do you want to take admin permissions from")):
+    if not is_admin(ctx) and not ctx.author.guild_permissions.administrator:
+        await ctx.respond("You don't have permission for this command")
+        return
+    if role.id not in admin_roles:
+        await ctx.respond("Role is already not admin")
+        return
+    cur.execute(f"DELETE FROM roles WHERE role_id = (?) AND purpose = (?)", (role.id, "ADMIN"))
+    con.commit()
+    admin_roles.remove(role.id)
+    await ctx.respond(f"Removed admin permissions for {role.name}")
+
 
 #clear all the data to start a fresh week
 @bot.slash_command(description = "Clear all data for the week (BE CAREFUL)")
@@ -219,6 +243,101 @@ async def clear(ctx, sure: discord.Option(str, description="Type \"Yes I am sure
     await ctx.respond("Weekly data reset!")
     
 
+#list current active sessions
+@bot.slash_command(description = "Show all live sessions")
+async def activesessions(ctx):
+    if not is_admin(ctx):
+        await ctx.respond("You don't have permission for this command")
+        return
+    sessions = cur.execute("SELECT user_id, start_time FROM sessions WHERE is_complete = 0").fetchall()
+    embed = discord.Embed(title="Active Sessions", color=discord.Colour.blurple())
+    for session in sessions:
+        user = bot.get_user(session[0])
+        if user.display_name is None:
+            user_name = user.name
+        else:
+            user_name = user.display_name
+        human_readable_time = (datetime.datetime.fromtimestamp(session[1])).strftime("%A, %H:%M:%S")
+        embed.add_field(name=f"**{user_name}**",value=f"Active since {human_readable_time}")
+    await ctx.respond(embed=embed)
+
+
+#list all users by if they've completed their hours TODO test
+@bot.slash_command(description = "Show time for all server members with required hours")
+async def serverreport(ctx):
+    if not is_admin(ctx):
+        await ctx.respond("You don't have permission for this command")
+        return
+    embed = discord.Embed(title="Full Report")
+    complete, partial, none, never = list()
+    for member in server.members:
+        if member.nick is None:
+            user_name = member.name
+        else:
+            user_name = member.nick
+        tup = cur.execute("SELECT total_time, required_hours FROM studiers WHERE user_id = (?)", (member.id)).fetchone()
+        if not tup:
+            never.add(member)
+        elif tup[0] == 0:
+            none.add([member, tup[0], tup[1]])
+        elif tup[0] < tup[1]:
+            partial.add([member, tup[0], tup[1]])
+        else:
+            complete.add([member, tup[0], tup[1]])
+    
+    embed.add_field(name="**Members who completed their hours:**", value="", inline=False)
+    for tup in complete:
+        if tup[0].nick is None:
+            user_name = tup[0].name
+        else:
+            user_name = tup[0].nick
+        readable_actual = str(datetime.timedelta(seconds=tup[1])).split('.')[0]
+        readable_required = str(datetime.timedelta(seconds=tup[2])).split('.')[0]
+        embed.add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}")
+    embed.add_field(name="\n\n**Members who completed only some of their hours:**", value="", inline=False)
+    for tup in partial:
+        if tup[0].nick is None:
+            user_name = tup[0].name
+        else:
+            user_name = tup[0].nick
+        readable_actual = str(datetime.timedelta(seconds=tup[1])).split('.')[0]
+        readable_required = str(datetime.timedelta(seconds=tup[2])).split('.')[0]
+        embed.add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
+    embed.add_field(name="\n\n**Members who completed none of their hours:**", value="", inline=False)
+    for tup in none:
+        if tup[0].nick is None:
+            user_name = tup[0].name
+        else:
+            user_name = tup[0].nick
+        readable_actual = str(datetime.timedelta(seconds=tup[1])).split('.')[0]
+        readable_required = str(datetime.timedelta(seconds=tup[2])).split('.')[0]
+        embed.add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
+    embed.add_field(name="\n\n**Members who have never studied:**", value="", inline=False)
+    for member in never:
+        if member.nick is None:
+            user_name = member.name
+        else:
+            user_name = member.nick
+        embed.add_field(name=f"{user_name}", value="", inline=False)
+    await ctx.respond(embed=embed)
+
+
+#set required hours for user TODO test
+@bot.slash_command(description = "Set required hours for a user")
+async def setrequired(ctx, user: discord.Option(discord.Member, required="True", description="Which role do you want to give admin permissions to"), hours: discord.Option(int, required="True", description="How many hours per week")):
+    user_id = user.id
+    if not is_admin(ctx):
+        await ctx.respond("You don't have permission for this command")
+        return
+    if user.nick is None:
+        user_name = user.name
+    else:
+        user_name = user.nick
+    cur.execute("UPDATE studiers SET required_hours = (?) WHERE user_id = (?)", (hours, user_id))
+    con.commit()
+    ctx.respond(f"{user_name} now needs {hours} hours per week!")
+
+
 
 ################# Extra functions and helpers #################
 
@@ -227,12 +346,14 @@ async def clear(ctx, sure: discord.Option(str, description="Type \"Yes I am sure
 async def hello(ctx):
     await ctx.respond("Hello!")
 
+#return bool for if user has admin permissions
 def is_admin(ctx):
     for role in ctx.author.roles:
         if role.id in admin_roles:
             return True
     return False
 
+#load admin list from database
 def load_admin():
     admin_tups = cur.execute(f"SELECT role_id FROM roles WHERE purpose = \"ADMIN\"").fetchall()
     for tup in admin_tups:
@@ -249,9 +370,5 @@ bot.run(BOT_TOKEN)
 
 
 #to do list
-    #reminders as people get behind
-    #auto reset?
-    #weekly report
-    #check for active
-    #list by day
+    #daily routine - ping people who are behind, clear at end of week, call report weekly
     #the entire competition tracker
