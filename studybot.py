@@ -10,7 +10,7 @@ SERVER_ID = 1227721401239343187
 intents = discord.Intents.all()
 client = discord.Client(intents=intents)
 DEFAULT_REQUIRED = 32400 #in seconds (9 hours)
-admin_roles = set()
+admin_roles, studier_roles = set(), set()
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -37,11 +37,13 @@ async def on_ready():
         FOREIGN KEY (user_id) REFERENCES studiers(user_id)
     );""")
     cur.execute("""CREATE TABLE IF NOT EXISTS roles(
-        role_id INTEGER PRIMARY KEY,
+        purp_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role_id INTEGER,
         purpose TEXT
     );""")
     con.commit()
     load_admin()
+    load_studiers()
     print("Study bot is ready!")
     channel = bot.get_channel(CHANNEL_ID)
     await channel.send("Hello! Study bot is ready!")
@@ -49,7 +51,7 @@ async def on_ready():
 
 
 
-########### Study tracker functions ###############
+###################################### Study tracker functions ######################################
 
 #start studying session
 @bot.slash_command(description = "Start your study session")
@@ -112,6 +114,7 @@ async def time(ctx, user: discord.Option(discord.Member, required="True", descri
     time_spent = tup[0]
     human_readable_time = str(datetime.timedelta(seconds=time_spent)).split('.')[0]
     await ctx.respond(f"{user_name} has {human_readable_time} study hours this week!")
+
 
 #show all sessions for a user (need permission if not that user)
 @bot.slash_command(description = "Show all of a user's activity for the week")
@@ -208,7 +211,7 @@ async def promote(ctx, role: discord.Option(discord.Role, required="True", descr
         await ctx.respond("Role is already admin")
         return
     cur.execute(f"INSERT INTO roles (role_id, purpose) VALUES (?, ?)", (role.id, "ADMIN"))
-    con .commit()
+    con.commit()
     admin_roles.add(role.id)
     await ctx.respond(f"Added role {role.name} as admin")
 
@@ -226,6 +229,36 @@ async def demote(ctx, role: discord.Option(discord.Role, required="True", descri
     con.commit()
     admin_roles.remove(role.id)
     await ctx.respond(f"Removed admin permissions for {role.name}")
+
+
+#add role for studier
+@bot.slash_command(description = "Make a role a studier role (listed in reports)")
+async def makestudier(ctx, role: discord.Option(discord.Role, required="True", description="Which role do you want to make a studier")):
+    if not is_admin(ctx):
+        await ctx.respond("You don't have permission for this command")
+        return
+    if role.id in studier_roles:
+        await ctx.respond("Role is already a studier")
+        return
+    cur.execute(f"INSERT INTO roles (role_id, purpose) VALUES (?, ?)", (role.id, "STUDIER"))
+    con.commit()
+    studier_roles.add(role.id)
+    await ctx.respond(f"Added role {role.name} as studier")
+
+
+#remove role for studier
+@bot.slash_command(description = "Remove studier attribute from role (listed in reports)")
+async def removestudier(ctx, role: discord.Option(discord.Role, required="True", description="Which role do you want to make not a studier")):
+    if not is_admin(ctx):
+        await ctx.respond("You don't have permission for this command")
+        return
+    if role.id not in studier_roles:
+        await ctx.respond("Role is already not a studier")
+        return
+    cur.execute(f"DELETE FROM roles WHERE role_id = (?) AND purpose = (?)", (role.id, "STUDIER"))
+    con.commit()
+    studier_roles.remove(role.id)
+    await ctx.respond(f"Removed role {role.name} as studiers")
 
 
 #clear all the data to start a fresh week
@@ -262,30 +295,34 @@ async def activesessions(ctx):
     await ctx.respond(embed=embed)
 
 
-#list all users by if they've completed their hours TODO test
+#list all users by if they've completed their hours
 @bot.slash_command(description = "Show time for all server members with required hours")
 async def serverreport(ctx):
     if not is_admin(ctx):
         await ctx.respond("You don't have permission for this command")
         return
-    embed = discord.Embed(title="Full Report")
-    complete, partial, none, never = list()
-    for member in server.members:
+    complete, partial, none, never = list(), list(), list(), list()
+    guild = ctx.guild
+    members = await guild.fetch_members(limit=None).flatten()
+    for member in members:
+        if not is_studier(member):
+            continue
         if member.nick is None:
             user_name = member.name
         else:
             user_name = member.nick
-        tup = cur.execute("SELECT total_time, required_hours FROM studiers WHERE user_id = (?)", (member.id)).fetchone()
-        if not tup:
-            never.add(member)
-        elif tup[0] == 0:
-            none.add([member, tup[0], tup[1]])
+        tup = cur.execute("SELECT total_time, required_hours FROM studiers WHERE user_id = (?)", (member.id,)).fetchone()
+        if not tup or tup[0] ==0:
+            none.append(member)
         elif tup[0] < tup[1]:
-            partial.add([member, tup[0], tup[1]])
+            partial.append([member, tup[0], tup[1]])
         else:
-            complete.add([member, tup[0], tup[1]])
+            complete.append([member, tup[0], tup[1]])
     
-    embed.add_field(name="**Members who completed their hours:**", value="", inline=False)
+    embeds=list()
+    
+    embeds.append(discord.Embed(title="**Members who completed all of their hours**", color=discord.Colour.blurple()))
+    fields=1
     for tup in complete:
         if tup[0].nick is None:
             user_name = tup[0].name
@@ -293,8 +330,15 @@ async def serverreport(ctx):
             user_name = tup[0].nick
         readable_actual = str(datetime.timedelta(seconds=tup[1])).split('.')[0]
         readable_required = str(datetime.timedelta(seconds=tup[2])).split('.')[0]
-        embed.add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}")
-    embed.add_field(name="\n\n**Members who completed only some of their hours:**", value="", inline=False)
+        if fields%25 != 0:
+            embeds[len(embeds)-1].add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
+        else:
+            embeds.append(discord.Embed(color=discord.Colour.blurple()))
+            embeds[len(embeds)-1].add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
+        fields+=1
+    
+    embeds.append(discord.Embed(title="**Members who completed only some of their hours**", color=discord.Colour.blurple()))
+    fields=1
     for tup in partial:
         if tup[0].nick is None:
             user_name = tup[0].name
@@ -302,27 +346,32 @@ async def serverreport(ctx):
             user_name = tup[0].nick
         readable_actual = str(datetime.timedelta(seconds=tup[1])).split('.')[0]
         readable_required = str(datetime.timedelta(seconds=tup[2])).split('.')[0]
-        embed.add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
-    embed.add_field(name="\n\n**Members who completed none of their hours:**", value="", inline=False)
-    for tup in none:
-        if tup[0].nick is None:
-            user_name = tup[0].name
+        if fields%25 != 0:
+            embeds[len(embeds)-1].add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
         else:
-            user_name = tup[0].nick
-        readable_actual = str(datetime.timedelta(seconds=tup[1])).split('.')[0]
-        readable_required = str(datetime.timedelta(seconds=tup[2])).split('.')[0]
-        embed.add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
-    embed.add_field(name="\n\n**Members who have never studied:**", value="", inline=False)
-    for member in never:
+            embeds.append(discord.Embed(color=discord.Colour.blurple()))
+            embeds[len(embeds)-1].add_field(name=f"{user_name}", value=f"{readable_actual} out of {readable_required}", inline=False)
+        fields+=1
+    
+    embeds.append(discord.Embed(title="**Members who completed none of their hours**", color=discord.Colour.blurple()))
+    fields=1
+    for member in none:
         if member.nick is None:
             user_name = member.name
         else:
             user_name = member.nick
-        embed.add_field(name=f"{user_name}", value="", inline=False)
-    await ctx.respond(embed=embed)
+        if fields%25 != 0:
+            embeds[len(embeds)-1].add_field(name=f"{user_name}", value=f"", inline=False)
+        else:
+            embeds.append(discord.Embed(color=discord.Colour.blurple()))
+            embeds[len(embeds)-1].add_field(name=f"{user_name}", value=f"", inline=False)
+        fields+=1
+    
+    for embed in embeds:
+        await ctx.respond(embed=embed)
 
 
-#set required hours for user TODO test
+#set required hours for user
 @bot.slash_command(description = "Set required hours for a user")
 async def setrequired(ctx, user: discord.Option(discord.Member, required="True", description="Which role do you want to give admin permissions to"), hours: discord.Option(int, required="True", description="How many hours per week")):
     user_id = user.id
@@ -333,9 +382,9 @@ async def setrequired(ctx, user: discord.Option(discord.Member, required="True",
         user_name = user.name
     else:
         user_name = user.nick
-    cur.execute("UPDATE studiers SET required_hours = (?) WHERE user_id = (?)", (hours, user_id))
+    cur.execute("UPDATE studiers SET required_hours = (?) WHERE user_id = (?)", (hours*3600, user_id))
     con.commit()
-    ctx.respond(f"{user_name} now needs {hours} hours per week!")
+    await ctx.respond(f"{user_name} now needs {hours} hours per week!")
 
 
 
@@ -346,10 +395,17 @@ async def setrequired(ctx, user: discord.Option(discord.Member, required="True",
 async def hello(ctx):
     await ctx.respond("Hello!")
 
-#return bool for if user has admin permissions
+#return bool for if user has admin permissions (takes ctx)
 def is_admin(ctx):
     for role in ctx.author.roles:
         if role.id in admin_roles:
+            return True
+    return False
+
+#return bool for if user is a studier (takes member object)
+def is_studier(member):
+    for role in member.roles:
+        if role.id in studier_roles:
             return True
     return False
 
@@ -358,6 +414,12 @@ def load_admin():
     admin_tups = cur.execute(f"SELECT role_id FROM roles WHERE purpose = \"ADMIN\"").fetchall()
     for tup in admin_tups:
         admin_roles.add(tup[0])
+
+#load studier list from database
+def load_studiers():
+    studier_tups = cur.execute(f"SELECT role_id FROM roles WHERE purpose = \"STUDIER\"").fetchall()
+    for tup in studier_tups:
+        studier_roles.add(tup[0])
 
 
 
