@@ -1,7 +1,7 @@
-# version 1.8.8.24
+# version 1.8.22.24
 # contact Kyle Seifert AΨ722 somehow if this isn't me and you have questions or something
 # IF YOU HELP WITH THIS BOT YOU CAN TALK ABOUT IT IN INTERVIEWS - converting the whole thing to typescript would be a very good project since python is losing discord support and typescript is useful (NODEJS!!!!)
-# need pycord and also python obviously
+# need to pip install py-cord and also python obviously
 # there are functions to set and load things like roles, but for specific stuff like default required hours and channel IDs change the value in the code here at the top
 # ^ same goes for things like help menu mentioning specific "Study hours" channel (the code doesn't actually track that channel vs others, name only relevant for help)
 
@@ -15,13 +15,13 @@ import os
 import json
 
 
-BOT_TOKEN = "REPLACE WITH TOKEN"
+BOT_TOKEN = ""
 CHANNEL_ID = 1227722112404553889
 SERVER_ID = 1227721401239343187
 intents = discord.Intents.all()
 client = discord.Client(intents=intents)
 DEFAULT_REQUIRED = 32400  # in seconds (9 hours)
-LONG_TIME = 10800  # time to check if studier is still there (in seconds (3 hours))
+LONG_TIME = 32400  # time to check if studier is still there (in seconds (9 hours))
 admin_roles, studier_roles, review_roles = set(), set(), set()
 cst = utc = datetime.timezone(datetime.timedelta(hours=3))
 DAILY_CHECK_TIME = datetime.time(hour=7, tzinfo=cst)
@@ -149,7 +149,10 @@ def dumpActivities(data):
 
 # check if activities is empty
 def isActivitiesEmpty():
-    return not os.path.getsize("activities.json")
+    try:
+        return not os.path.getsize("activities.json")
+    except:
+        return True
 
 
 # load competition data from JSON file
@@ -166,7 +169,10 @@ def dumpCompetitors(data):
 
 # check if competition data is empty
 def isCompetitorsEmpty():
-    return not os.path.getsize("competitors.json")
+    try:
+        return not os.path.getsize("competitors.json")
+    except:
+        return True
 
 
 def getActivityAutocomplete(ctx: discord.AutocompleteContext):
@@ -269,6 +275,7 @@ async def help(ctx):
 )
 async def admin_help(ctx):
     embed = discord.Embed(title="**Admin Manual**", color=discord.Colour.blurple())
+    embed2 = discord.Embed(title="", color=discord.Colour.blurple())
     embed.add_field(
         name="**/subtract**",
         value="Subtract time for a user. You can't subtract more hours than they have for the week. Put the name of the user in the user field (discord should autocomplete)",
@@ -322,6 +329,16 @@ async def admin_help(ctx):
     embed.add_field(
         name="**/prev_serverreport**",
         value='Get last week\'s report of everyone in the server with a "studier" role (**/makestudier**) organized by whether they have all, some, or none of their hours.',
+        inline=False,
+    )
+    embed.add_field(
+        name="**/groupreport**",
+        value='Get study hour report for group members with required study hours',
+        inline=False,
+    )
+    embed.add_field(
+        name="**/prev_groupreport**",
+        value="Get previous week's study hour report for group members with required study hours",
         inline=False,
     )
     embed.add_field(
@@ -384,13 +401,14 @@ async def admin_help(ctx):
         value="Add points to a user without an associated activity. Specify the point value and reason.",
         inline=False,
     )
-    embed.add_field(
+    embed2.add_field(
         name="**/subtractpoints**",
         value="Subtract points from a user without an associated activity. Specify the point value and reason.",
         inline=False,
     )
 
     await ctx.respond(embed=embed)
+    await ctx.respond(embed=embed2)
 
 
 ###################################### Study tracker functions ######################################
@@ -1054,7 +1072,7 @@ async def serverreport(ctx):
 @bot.slash_command(
     description="Show previous week time for all server members with required hours"
 )
-async def prevserverreport(ctx):
+async def prev_serverreport(ctx):
     if not is_admin(ctx.author):
         await ctx.respond("You don't have permission for this command")
         return
@@ -1173,6 +1191,88 @@ async def prevserverreport(ctx):
 
     for embed in embeds:
         await ctx.respond(embed=embed)
+
+
+@bot.slash_command(description="Show study hour report for group members who have required hours")
+async def groupreport(ctx, group_name: discord.Option(
+        str,
+        required=True,
+        description="Name of the group to get a report for",
+        autocomplete=getGroupAutocomplete,
+    )):
+    if not is_admin(ctx.author):
+        await ctx.respond("You don't have permission for this command")
+        return
+    if isCompetitorsEmpty():
+        await ctx.respond("There is no group by that name! (There are no competitors)")
+        return
+    competitors = loadCompetitors()
+    if group_name not in getGroupNames():
+        await ctx.respond(f"There is no group named '{group_name}'")
+        return
+    guild = ctx.guild
+    members = await guild.fetch_members(limit=None).flatten()
+    groupStudiers = []
+    for member in members:
+        if str(member.id) in competitors and competitors[str(member.id)]["group"] == group_name and is_studier(member):
+            groupStudiers.append(member.id)
+    if len(groupStudiers) == 0:
+        await ctx.respond(f"Group '{group_name}' has no members with required study hours")
+        return
+    embed = discord.Embed(color=discord.Colour.blurple(), title=f"Study hour report for '{group_name}'")
+    for studier in groupStudiers:
+        tup = cur.execute(
+            "SELECT total_time, required_hours FROM studiers WHERE user_id = (?)",
+            (studier,),
+        ).fetchone()
+        if not tup:
+            embed.add_field(name=f"{getName(bot.get_user(int(studier)))}", value="No record found", inline=False)
+        else:
+            readable_actual = str(datetime.timedelta(seconds=tup[0])).split(".")[0]
+            readable_required = str(datetime.timedelta(seconds=tup[1])).split(".")[0]
+            embed.add_field(name=f"{getName(bot.get_user(int(studier)))}", value=f"{readable_actual} out of {readable_required}", inline=False)
+    await ctx.respond(embed=embed)
+    
+@bot.slash_command(description="Show previous week's study hour report for group members who have required hours")
+async def prev_groupreport(ctx, group_name: discord.Option(
+        str,
+        required=True,
+        description="Name of the group to get a report for",
+        autocomplete=getGroupAutocomplete,
+    )):
+    if not is_admin(ctx.author):
+        await ctx.respond("You don't have permission for this command")
+        return
+    if isCompetitorsEmpty():
+        await ctx.respond("There is no group by that name! (There are no competitors)")
+        return
+    competitors = loadCompetitors()
+    if group_name not in getGroupNames():
+        await ctx.respond(f"There is no group named '{group_name}'")
+        return
+    guild = ctx.guild
+    members = await guild.fetch_members(limit=None).flatten()
+    groupStudiers = []
+    for member in members:
+        if str(member.id) in competitors and competitors[str(member.id)]["group"] == group_name and is_studier(member):
+            groupStudiers.append(member.id)
+    if len(groupStudiers) == 0:
+        await ctx.respond(f"Group '{group_name}' has no members with required study hours")
+        return
+    embed = discord.Embed(color=discord.Colour.blurple(), title=f"Previous week study hour report for '{group_name}'")
+    for studier in groupStudiers:
+        tup = cur.execute(
+            "SELECT total_time, required_hours FROM prevstudiers WHERE user_id = (?)",
+            (studier,),
+        ).fetchone()
+        if not tup:
+            embed.add_field(name=f"{getName(bot.get_user(int(studier)))}", value="No record found", inline=False)
+        else:
+            readable_actual = str(datetime.timedelta(seconds=tup[0])).split(".")[0]
+            readable_required = str(datetime.timedelta(seconds=tup[1])).split(".")[0]
+            embed.add_field(name=f"{getName(bot.get_user(int(studier)))}", value=f"{readable_actual} out of {readable_required}", inline=False)
+    await ctx.respond(embed=embed)
+            
 
 
 # set required hours for user
@@ -1311,6 +1411,7 @@ async def removeactivity(
         str,
         required=True,
         description="Name of the activity to be removed. If unsure, use '/seeactivites' to see a list of activities.",
+        autocomplete=getActivityAutocomplete,
     ),
 ):
     if not is_admin(ctx.author):
@@ -1885,7 +1986,7 @@ async def subtractpoints(
 # currently bases channel / guild off context. I don't think this will be an issue right now but it might be in the future
 # could also look into seperate tasks/coroutines per person and not have to do so much iterating (discord won't let you have multiple task instances to my knowledge)
 # could also look into adding persistence (not a big deal, only matters if bot restarts and nobody else starts after)
-@tasks.loop(seconds=7)
+@tasks.loop(minutes=15)
 async def check_vc(ctx):
     guild = ctx.guild
     members = await guild.fetch_members(limit=None).flatten()
@@ -2020,3 +2121,5 @@ bot.run(BOT_TOKEN)
 # cogs to group commands
 # steal for competition (catch someone skipping class)
 # setters for constants? modular function
+# view report by study group
+# error messages?
