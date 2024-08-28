@@ -1822,6 +1822,11 @@ async def completeactivity(
         description="What activity did they complete",
         autocomplete=getActivityAutocomplete,
     ),
+    amount: discord.Option(
+        int,
+        required=False,
+        description="How many times did they do it"
+    )
 ):
     if not is_admin(ctx.author):
         await ctx.respond("You don't have permission for this command")
@@ -1836,6 +1841,10 @@ async def completeactivity(
         await ctx.respond(f"{getName(user)} is not a competitor")
         return
     competitor = competitors[user_id]
+    if amount is not None:
+        amt = amount
+    else:
+        amt = 1
     if activity not in activities:
         await ctx.respond(f"Activity '{activity}' is not a valid activity")
         return
@@ -1845,15 +1854,23 @@ async def completeactivity(
                 f"Activity '{activity}' can only be completed once per person"
             )
             return
-        competitor["activities"][activity] += 1
+        competitor["activities"][activity] += amt
     else:
-        competitor["activities"][activity] = 1
-    competitor["points"] += activities[activity]["value"]
+        if activities[activity]["canStack"] == False and amt>1:
+            await ctx.respond(
+                f"Activity '{activity}' can only be completed once per person"
+            )
+            return
+        competitor["activities"][activity] = amt
+    competitor["points"] += activities[activity]["value"]*amt
     competitors[user_id] = competitor
     dumpCompetitors(competitors)
     await ctx.respond(
         f"{getName(user)} has completed '{activity}' and now has {competitor['points']} points!"
     )
+    
+    #set amount variable earlier
+    #use that for the stuff idk
 
 
 @bot.slash_command(description="Remove an activity from a user")
